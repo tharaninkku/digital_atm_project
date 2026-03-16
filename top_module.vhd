@@ -1,0 +1,359 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity top_module is
+    Port (
+        clk         : in  STD_LOGIC;
+        reset       : in  STD_LOGIC;
+        sw          : in  STD_LOGIC_VECTOR (15 downto 0); 
+        btn_center  : in  STD_LOGIC;
+        btn_left    : in  STD_LOGIC;
+        btn_right   : in  STD_LOGIC;
+        btn_top     : in  STD_LOGIC;
+        btn_bottom  : in  STD_LOGIC;
+        seg         : out STD_LOGIC_VECTOR (6 downto 0);  
+        an          : out STD_LOGIC_VECTOR (7 downto 0)   
+    );
+end top_module;
+
+architecture Structural of top_module is
+
+    -- 1. DECLARE CHIP 1: State Controller (FSM)
+    component state_controller
+        Port ( 
+            clk             : in STD_LOGIC;
+            reset           : in STD_LOGIC;
+            btn_left        : in STD_LOGIC;
+            btn_right       : in STD_LOGIC;
+            btn_top         : in STD_LOGIC;
+            btn_bottom      : in STD_LOGIC;
+            btn_center      : in STD_LOGIC;
+            create_acc_done : in STD_LOGIC;
+            login_success   : in STD_LOGIC;
+            db_full         : in STD_LOGIC;
+            deposit_done    : in STD_LOGIC; 
+            withdraw_done   : in STD_LOGIC;
+            transfer_done   : in STD_LOGIC;
+            adder_overflow  : in STD_LOGIC;
+            sub_underflow   : in STD_LOGIC;
+            update_balance_enable : out STD_LOGIC;                       
+            current_state   : out STD_LOGIC_VECTOR (2 downto 0)
+        );
+    end component;
+
+    -- 2. DECLARE CHIP 2: Account Creation
+    component account_creation
+        Port (
+            clk           : in  STD_LOGIC;
+            reset         : in  STD_LOGIC;
+            enable        : in  STD_LOGIC;                      
+            sw_input      : in  STD_LOGIC_VECTOR (15 downto 0); 
+            btn_enter     : in  STD_LOGIC;
+            state_led     : out STD_LOGIC_VECTOR (1 downto 0);
+            seg_output    : out STD_LOGIC_VECTOR (6 downto 0);
+            digit_select  : out STD_LOGIC_VECTOR (7 downto 0);
+            create_done   : out STD_LOGIC;
+            account_out   : out STD_LOGIC_VECTOR (15 downto 0);   
+            password_out  : out STD_LOGIC_VECTOR (15 downto 0)    
+        );
+    end component;
+
+    -- 3. DECLARE CHIP 3: Database Register
+    component database_register
+        Port (
+            clk               : in STD_LOGIC;
+            reset             : in STD_LOGIC;
+            write_enable      : in STD_LOGIC;                       
+            account_in        : in STD_LOGIC_VECTOR(15 downto 0);    
+            password_in       : in STD_LOGIC_VECTOR(15 downto 0);    
+            update_bal_enable : in STD_LOGIC;
+            target_user_index : in STD_LOGIC_VECTOR(1 downto 0);  
+            new_balance_in    : in STD_LOGIC_VECTOR(15 downto 0); 
+            all_accounts      : out STD_LOGIC_VECTOR(47 downto 0); 
+            all_passwords     : out STD_LOGIC_VECTOR(47 downto 0);
+            all_balances      : out STD_LOGIC_VECTOR(47 downto 0); 
+            db_full           : out STD_LOGIC   
+        );
+    end component;
+
+    -- 4. DECLARE CHIP 4: Login
+    component login
+        Port (
+            clk                  : in  STD_LOGIC;
+            reset                : in  STD_LOGIC;
+            enable               : in  STD_LOGIC;                      
+            sw_input             : in  STD_LOGIC_VECTOR (15 downto 0); 
+            btn_enter            : in  STD_LOGIC;
+            all_accounts         : in  STD_LOGIC_VECTOR (47 downto 0); 
+            all_passwords        : in  STD_LOGIC_VECTOR (47 downto 0);
+            seg_output           : out STD_LOGIC_VECTOR (6 downto 0);
+            digit_select         : out STD_LOGIC_VECTOR (7 downto 0);
+            login_success        : out STD_LOGIC;                      
+            logged_in_user_index : out STD_LOGIC_VECTOR (1 downto 0)   
+        );
+    end component;
+
+    -- 5. DECLARE CHIP 5 & 6: Math Units (Adder & Subtractor)
+    component bcd_adder
+        Port ( 
+            current_balance : in  STD_LOGIC_VECTOR (15 downto 0);
+            deposit_amount  : in  STD_LOGIC_VECTOR (15 downto 0);
+            new_balance     : out STD_LOGIC_VECTOR (15 downto 0);
+            overflow        : out STD_LOGIC
+        );
+    end component;
+
+    component bcd_subtractor
+        Port ( 
+            current_balance  : in  STD_LOGIC_VECTOR (15 downto 0);
+            sub_amount       : in  STD_LOGIC_VECTOR (15 downto 0);
+            new_balance      : out STD_LOGIC_VECTOR (15 downto 0);
+            underflow        : out STD_LOGIC -- High if trying to withdraw more than balance
+        );
+    end component;
+
+    -- 7. DECLARE CHIP 7: Deposit Input
+    component deposit_input
+        Port (
+            clk           : in  STD_LOGIC;
+            reset         : in  STD_LOGIC;
+            enable        : in  STD_LOGIC;                      
+            sw_input      : in  STD_LOGIC_VECTOR (15 downto 0); 
+            btn_enter     : in  STD_LOGIC;
+            seg_output    : out STD_LOGIC_VECTOR (6 downto 0);
+            digit_select  : out STD_LOGIC_VECTOR (7 downto 0);
+            deposit_out   : out STD_LOGIC_VECTOR (15 downto 0); 
+            deposit_done  : out STD_LOGIC                        
+        );
+    end component;
+
+    -- 8. DECLARE CHIP 8: Withdraw Input
+    component withdraw_input
+        Port (
+            clk           : in  STD_LOGIC;
+            reset         : in  STD_LOGIC;
+            enable        : in  STD_LOGIC;                      
+            sw_input      : in  STD_LOGIC_VECTOR (15 downto 0); 
+            btn_enter     : in  STD_LOGIC;
+            seg_output    : out STD_LOGIC_VECTOR (6 downto 0);
+            digit_select  : out STD_LOGIC_VECTOR (7 downto 0);
+            withdraw_out  : out STD_LOGIC_VECTOR (15 downto 0); 
+            withdraw_done : out STD_LOGIC                        
+        );
+    end component;
+
+    -- 9. DECLARE CHIP 9: Transfer Input
+    component transfer_input
+        Port (
+            clk                  : in  STD_LOGIC;
+            reset                : in  STD_LOGIC;
+            enable               : in  STD_LOGIC;                      
+            sw_input             : in  STD_LOGIC_VECTOR (15 downto 0); 
+            btn_enter            : in  STD_LOGIC;
+            all_accounts         : in  STD_LOGIC_VECTOR (47 downto 0); 
+            seg_output           : out STD_LOGIC_VECTOR (6 downto 0);
+            digit_select         : out STD_LOGIC_VECTOR (7 downto 0);
+            transfer_amount_out  : out STD_LOGIC_VECTOR (15 downto 0); 
+            target_user_index_out: out STD_LOGIC_VECTOR (1 downto 0);
+            transfer_done        : out STD_LOGIC                        
+        );
+    end component;
+
+    -- INTERNAL WIRES
+    signal wire_current_state   : STD_LOGIC_VECTOR (2 downto 0);
+    signal wire_update_bal_enable : STD_LOGIC;
+    
+    signal wire_enable_create   : STD_LOGIC;
+    signal wire_create_acc_done : STD_LOGIC;
+    signal wire_new_account     : STD_LOGIC_VECTOR (15 downto 0);
+    signal wire_new_password    : STD_LOGIC_VECTOR (15 downto 0);
+    
+    signal wire_enable_login    : STD_LOGIC;
+    signal wire_login_success   : STD_LOGIC;
+    signal wire_logged_in_user  : STD_LOGIC_VECTOR (1 downto 0);
+
+    signal wire_db_full         : STD_LOGIC;
+    signal wire_all_accounts    : STD_LOGIC_VECTOR (47 downto 0);
+    signal wire_all_passwords   : STD_LOGIC_VECTOR (47 downto 0);
+    signal wire_all_balances    : STD_LOGIC_VECTOR (47 downto 0);
+    signal wire_active_balance  : STD_LOGIC_VECTOR (15 downto 0);
+
+    -- Segment Routing Wires
+    signal acc_seg, login_seg, dep_seg, with_seg, trans_seg : STD_LOGIC_VECTOR (6 downto 0);
+    signal acc_an, login_an, dep_an, with_an, trans_an    : STD_LOGIC_VECTOR (7 downto 0);
+
+    -- Transaction Wires
+    signal wire_enable_deposit, wire_deposit_done   : STD_LOGIC;
+    signal wire_enable_withdraw, wire_withdraw_done : STD_LOGIC;
+    signal wire_enable_transfer, wire_transfer_done : STD_LOGIC;
+
+    signal wire_deposit_amount, wire_withdraw_amount, wire_transfer_amount : STD_LOGIC_VECTOR (15 downto 0);
+    signal wire_transfer_target_idx : STD_LOGIC_VECTOR (1 downto 0);
+
+    -- Math Wires
+    signal wire_add_new_bal, wire_sub_new_bal : STD_LOGIC_VECTOR (15 downto 0);
+    signal wire_adder_overflow, wire_sub_underflow : STD_LOGIC;
+
+    -- Final Balance calculation multiplexer wire
+    signal wire_calculated_new_bal : STD_LOGIC_VECTOR (15 downto 0);
+
+begin
+
+    -- ENABLE LOGIC (Wakes up the right chip based on FSM state)
+    -- *Make sure your FSM states match these numbers exactly!*
+    wire_enable_create   <= '1' when wire_current_state = "001" else '0';
+    wire_enable_login    <= '1' when wire_current_state = "010" else '0';
+    wire_enable_deposit  <= '1' when wire_current_state = "100" else '0'; 
+    wire_enable_withdraw <= '1' when wire_current_state = "101" else '0';
+    wire_enable_transfer <= '1' when wire_current_state = "110" else '0';
+
+    -- THE DISPLAY TRAFFIC COP (Multiplexer)
+    seg <= acc_seg   when wire_enable_create = '1' else 
+           login_seg when wire_enable_login = '1' else 
+           dep_seg   when wire_enable_deposit = '1' else
+           with_seg  when wire_enable_withdraw = '1' else
+           trans_seg when wire_enable_transfer = '1' else
+           "1111111"; 
+
+    an  <= acc_an   when wire_enable_create = '1' else 
+           login_an when wire_enable_login = '1' else 
+           dep_an   when wire_enable_deposit = '1' else
+           with_an  when wire_enable_withdraw = '1' else
+           trans_an when wire_enable_transfer = '1' else
+           "11111111"; 
+
+    -- Balance Extractor Multiplexer
+    wire_active_balance <= wire_all_balances(15 downto 0)  when wire_logged_in_user = "00" else
+                           wire_all_balances(31 downto 16) when wire_logged_in_user = "01" else
+                           wire_all_balances(47 downto 32) when wire_logged_in_user = "10" else
+                           (others => '0');
+
+    -- Mux to decide which math unit writes to the database
+    wire_calculated_new_bal <= wire_add_new_bal when wire_enable_deposit = '1' else
+                               wire_sub_new_bal when wire_enable_withdraw = '1' else
+                               wire_sub_new_bal; -- Add transfer logic here later
+
+    -- 1. INSTANTIATE STATE CONTROLLER
+    u_state_ctrl: state_controller port map (
+        clk                   => clk,
+        reset                 => reset,
+        btn_left              => btn_left,
+        btn_right             => btn_right,
+        btn_top               => btn_top,
+        btn_bottom            => btn_bottom,
+        btn_center            => btn_center,
+        create_acc_done       => wire_create_acc_done,  
+        login_success         => wire_login_success,    
+        db_full               => wire_db_full,
+        deposit_done          => wire_deposit_done,     
+        withdraw_done         => wire_withdraw_done,
+        transfer_done         => wire_transfer_done,
+        adder_overflow        => wire_adder_overflow,   
+        sub_underflow         => wire_sub_underflow,
+        update_balance_enable => wire_update_bal_enable,
+        current_state         => wire_current_state     
+    );
+
+    -- 2. INSTANTIATE ACCOUNT CREATION
+    u_acc_create: account_creation port map (
+        clk           => clk,
+        reset         => reset,
+        enable        => wire_enable_create,      
+        sw_input      => sw,          
+        btn_enter     => btn_center,
+        state_led     => open,                    
+        seg_output    => acc_seg,                 
+        digit_select  => acc_an,                  
+        create_done   => wire_create_acc_done,    
+        account_out   => wire_new_account,        
+        password_out  => wire_new_password        
+    );
+
+    -- 3. INSTANTIATE DATABASE REGISTER
+    u_db: database_register port map (
+        clk               => clk,
+        reset             => reset,
+        write_enable      => wire_create_acc_done, 
+        account_in        => wire_new_account,     
+        password_in       => wire_new_password,    
+        update_bal_enable => wire_update_bal_enable,
+        target_user_index => wire_logged_in_user,
+        new_balance_in    => wire_calculated_new_bal,
+        all_accounts      => wire_all_accounts,    
+        all_passwords     => wire_all_passwords,   
+        all_balances      => wire_all_balances,    
+        db_full           => wire_db_full          
+    );
+
+    -- 4. INSTANTIATE LOGIN
+    u_login: login port map (
+        clk                  => clk,
+        reset                => reset,
+        enable               => wire_enable_login,
+        sw_input             => sw, 
+        btn_enter            => btn_center,
+        all_accounts         => wire_all_accounts,  
+        all_passwords        => wire_all_passwords, 
+        seg_output           => login_seg,          
+        digit_select         => login_an,           
+        login_success        => wire_login_success, 
+        logged_in_user_index => wire_logged_in_user 
+    );
+
+    -- 5 & 6. INSTANTIATE MATH UNITS
+    u_adder: bcd_adder port map (
+        current_balance => wire_active_balance,       
+        deposit_amount  => wire_deposit_amount,       
+        new_balance     => wire_add_new_bal,   
+        overflow        => wire_adder_overflow        
+    );
+
+    u_subtractor: bcd_subtractor port map (
+        current_balance => wire_active_balance,
+        sub_amount      => wire_withdraw_amount, -- Will need a mux here later to select between withdraw and transfer amounts
+        new_balance     => wire_sub_new_bal,
+        underflow       => wire_sub_underflow
+    );
+
+    -- 7. INSTANTIATE DEPOSIT INPUT
+    u_deposit: deposit_input port map (
+        clk           => clk,
+        reset         => reset,
+        enable        => wire_enable_deposit,
+        sw_input      => sw, 
+        btn_enter     => btn_center,
+        seg_output    => dep_seg,            
+        digit_select  => dep_an,             
+        deposit_out   => wire_deposit_amount,
+        deposit_done  => wire_deposit_done   
+    );
+
+    -- 8. INSTANTIATE WITHDRAW INPUT
+    u_withdraw: withdraw_input port map (
+        clk           => clk,
+        reset         => reset,
+        enable        => wire_enable_withdraw,
+        sw_input      => sw,
+        btn_enter     => btn_center,
+        seg_output    => with_seg,
+        digit_select  => with_an,
+        withdraw_out  => wire_withdraw_amount,
+        withdraw_done => wire_withdraw_done
+    );
+
+    -- 9. INSTANTIATE TRANSFER INPUT
+    u_transfer: transfer_input port map (
+        clk                   => clk,
+        reset                 => reset,
+        enable                => wire_enable_transfer,
+        sw_input              => sw,
+        btn_enter             => btn_center,
+        all_accounts          => wire_all_accounts,
+        seg_output            => trans_seg,
+        digit_select          => trans_an,
+        transfer_amount_out   => wire_transfer_amount,
+        target_user_index_out => wire_transfer_target_idx,
+        transfer_done         => wire_transfer_done
+    );
+
+end Structural;
